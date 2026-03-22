@@ -279,8 +279,9 @@ const Game = (() => {
 
   let state              = 'start';
   let currentQ           = null;
-  let questionsAnswered  = 0;   // 答對+答錯+超時，合計
-  let actionLock         = false; // 防重複觸發
+  let questionsAnswered  = 0;
+  let actionLock         = false;
+  let proceedLock        = false;   // 防止 proceedNext 被重複呼叫
   let autoNextTimer      = null;
   let startHover         = null;
   let resultHover        = null;
@@ -349,8 +350,8 @@ const Game = (() => {
 
   // ── 結果畫面（手動繼續） ───────────────────────────
   function doResult(gs) {
-    // autoNext 模式下不需要手勢
-    if (autoNextTimer !== null) return;
+    // autoNext 模式、或已在跳題中，不處理手勢
+    if (autoNextTimer !== null || proceedLock) return;
 
     const ring = $('result-ring'), CIRC = 113.1;
     Cursor.update(gs.x, gs.y, gs.thumbActive, 0);
@@ -457,7 +458,7 @@ const Game = (() => {
 
     // 設定計時器回呼，然後啟動
     Timer.onExpire(() => {
-      if (actionLock) return;           // 已答題，忽略
+      if (actionLock) return;
       actionLock = true;
       state = 'result';
       handleTimeout();
@@ -466,6 +467,7 @@ const Game = (() => {
     Timer.start(Q_TIME_LIMIT);
 
     state = 'play';
+    proceedLock = false;   // 解鎖，下一題可以正常跳題
   }
 
   // 答題處理（從 doPlay 觸發，此時 actionLock=true, state='result'）
@@ -537,22 +539,25 @@ const Game = (() => {
 
   // 進入下一題或結算（答滿 10 題才結算）
   async function proceedNext() {
+    if (proceedLock) return;      // 已在跳題中，直接忽略
+    proceedLock = true;
     if (autoNextTimer) { clearTimeout(autoNextTimer); autoNextTimer = null; }
     hide($('screen-result'));
+    resultHover = null;
 
-    // 答滿 10 題 → 結算，不推進後端 index
     if (questionsAnswered >= TOTAL_Q) {
       showFinal(currentQ?.score ?? 0);
       return;
     }
 
-    // 還有題目 → 推進後端 index 一步，再取題
     await fetch('/next', { method: 'POST' });
     await loadNextQuestion();
+    // loadNextQuestion 結尾會解鎖 proceedLock
   }
 
   function showFinal(score) {
     state = 'final';
+    proceedLock = false;
     if (autoNextTimer) { clearTimeout(autoNextTimer); autoNextTimer = null; }
     hideGame();
     hide($('hud')); hide($('timer-bar-wrap')); hide($('hint-text')); hide($('screen-result'));
@@ -571,7 +576,7 @@ const Game = (() => {
     Timer.stop();
     await fetch('/reset', { method: 'POST' });
     state = 'start'; currentQ = null;
-    questionsAnswered = 0; actionLock = false;
+    questionsAnswered = 0; actionLock = false; proceedLock = false;
     startHover = null; resultHover = null;
     Aim.reset(); Audio.resetTick();
     hide($('screen-final')); hide($('screen-result'));
